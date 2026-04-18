@@ -1,51 +1,78 @@
 pipeline {
-    // 1. Агент: указывает, где выполнять сборку.
-    // 'any' означает, что Jenkins может использовать любой доступный агент (например, ваш главный узел).
     agent any
 
-    // 2. Этапы (Stages): сердце нашего Pipeline.
+    environment {
+        // Имя бинарного файла, который мы создадим
+        BINARY_NAME = 'my-go-app'
+        // Версия для Nexus (можно использовать номер сборки Jenkins)
+        VERSION = "1.0.${BUILD_NUMBER}"
+    }
+
     stages {
-        
-        // Этап 1: Клонирование репозитория
         stage('Checkout') {
             steps {
-                // Эта команда автоматически клонирует код из Git, 
-                // используя настройки, указанные в конфигурации Job'ы (URL репозитория, ветка, креденшелы).
-                // Это аналог настройки "Source Code Management" в Freestyle проекте.
                 checkout scm
-                echo "Репозиторий успешно склонирован."
+                echo "Репозиторий склонирован"
             }
         }
 
-        // Этап 2: Запуск тестов Go
         stage('Run Go Tests') {
             steps {
-                // Запускаем тесты в директории с проектом.
-                // Важно: мы используем 'sh' для выполнения shell-команд, так как наш агент — Linux.
                 sh 'go test .'
-                echo "Go тесты пройдены."
+                echo "Тесты пройдены"
             }
         }
 
-        // Этап 3: Сборка Docker образа
-        stage('Build Docker Image') {
+        stage('Build Go Binary') {
             steps {
-                // Собираем Docker образ.
-                // Обратите внимание на точку '.' в конце — она указывает на контекст сборки (текущую директорию).
-                sh 'docker build -t my-go-app .'
-                echo "Docker образ 'my-go-app' успешно собран."
+                // Эта команда должна быть из вашего Dockerfile
+                // Убедитесь, что путь к исходникам правильный
+                sh """
+                    CGO_ENABLED=0 GOOS=linux go build -o ${BINARY_NAME} .
+                """
+                echo "Бинарный файл ${BINARY_NAME} собран"
+            }
+        }
+
+        stage('Archive Artifact') {
+            steps {
+                // Сохраняем бинарный файл как артефакт Jenkins
+                // Он будет доступен на странице сборки
+                archiveArtifacts artifacts: "${BINARY_NAME}", fingerprint: true
+                echo "Артефакт заархивирован"
+            }
+        }
+
+        stage('Upload to Nexus') {
+            steps {
+                // Загружаем файл в raw-hosted репозиторий
+                nexusArtifactUploader(
+                    nexusVersion: 'nexus3',
+                    protocol: 'http',
+                    nexusUrl: 'localhost:8081',
+                    repository: 'my-raw-repo',        // имя вашего репозитория в Nexus
+                    credentialsId: 'nexus-login',     // ID креденшелов в Jenkins (настроим позже)
+                    groupId: 'com.example',
+                    version: "${VERSION}",
+                    artifacts: [
+                        [
+                            artifactId: "${BINARY_NAME}",
+                            type: 'bin',
+                            file: "${BINARY_NAME}"
+                        ]
+                    ]
+                )
+                echo "Файл загружен в Nexus"
             }
         }
     }
-    
-    // 3. Пост-обработка (Post): выполняется всегда после завершения всех этапов.
+
     post {
-        // Всегда выводим сообщение об успехе или неудаче.
         success {
-            echo 'Поздравляю! Pipeline выполнен успешно!'
+            echo "Pipeline успешно выполнен! Бинарный файл загружен в Nexus."
         }
         failure {
-            echo 'Упс! Что-то пошло не так во время выполнения Pipeline.'
+            echo "Pipeline завершился с ошибкой."
         }
     }
 }
